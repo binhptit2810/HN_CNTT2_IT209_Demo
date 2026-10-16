@@ -1,0 +1,24 @@
+# Build output (Gradle)
+build/
+.gradle/
+out/
+*.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS / log
+.DS_Store
+Thumbs.db
+*.log
+
+# Khóa SSH - TUYỆT ĐỐI không commit
+*.pem
+id_*
+deploy_key
+deploy_key.pub
+# Thong tin moi truong va mat khau
+student.env
+.env
