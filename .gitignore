@@ -20,5 +20,4 @@ id_*
 deploy_key
 deploy_key.pub
 # Thong tin moi truong va mat khau
-student.env
 .env

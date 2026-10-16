@@ -1,10 +1,4 @@
-# =============================================================================
-#  .github/workflows/ci-cd.yml - ĐÁP ÁN
-#  - Các bước không có TODO: ĐÃ VIẾT SẴN, không cần sửa.
-#  - Sinh viên điền các ô ______ tại các dòng TODO.
-#  - job build : kiểm tra student.env -> build & chạy thử -> smoke test -> push image GHCR
-#  - job deploy: SSH vào server -> cập nhật mã nguồn -> pull image -> khởi động lại
-# =============================================================================
+```yaml
 name: CI/CD
 
 on:
@@ -24,52 +18,76 @@ jobs:
       packages: write
     outputs:
       image: ${{ steps.meta.outputs.image }}
+
     steps:
       - name: Checkout mã nguồn
         uses: actions/checkout@v4
 
-      - name: Kiểm tra thông tin trong student.env
+      - name: Tạo student.env từ GitHub Secrets
+        env:
+          STUDENT_NAME: ${{ secrets.STUDENT_NAME }}
+          STUDENT_ID: ${{ secrets.STUDENT_ID }}
+          STUDENT_CLASS: ${{ secrets.STUDENT_CLASS }}
+          STUDENT_EMAIL: ${{ secrets.STUDENT_EMAIL }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
         run: |
-          set -a; source student.env; set +a
-          for v in STUDENT_NAME STUDENT_ID STUDENT_CLASS STUDENT_EMAIL GITHUB_USERNAME \
-                   APP_PORT COMPOSE_PROJECT_NAME MYSQL_USER MYSQL_PASSWORD MYSQL_ROOT_PASSWORD; do
+          set -e
+          for v in STUDENT_NAME STUDENT_ID STUDENT_CLASS STUDENT_EMAIL MYSQL_USER MYSQL_PASSWORD MYSQL_ROOT_PASSWORD; do
             if [ -z "${!v}" ]; then
-              echo "::error file=student.env::Chưa điền $v trong student.env"
+              echo "::error::Chưa cấu hình GitHub Secret $v"
               exit 1
             fi
           done
-          if [ "$APP_PORT" -lt 8080 ]; then
-            echo "::error file=student.env::APP_PORT phải từ 8080 trở lên"
-            exit 1
-          fi
-          echo "### Sinh viên: $STUDENT_NAME - $STUDENT_ID - $STUDENT_CLASS" >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            printf 'STUDENT_NAME=%s\n' "$STUDENT_NAME"
+            printf 'STUDENT_ID=%s\n' "$STUDENT_ID"
+            printf 'STUDENT_CLASS=%s\n' "$STUDENT_CLASS"
+            printf 'STUDENT_EMAIL=%s\n' "$STUDENT_EMAIL"
+            printf 'GITHUB_USERNAME=%s\n' "$GITHUB_REPOSITORY_OWNER"
+            printf 'APP_PORT=8081\n'
+            printf 'COMPOSE_PROJECT_NAME=binh2810-de00101\n'
+            printf 'MYSQL_USER=%s\n' "$MYSQL_USER"
+            printf 'MYSQL_PASSWORD=%s\n' "$MYSQL_PASSWORD"
+            printf 'MYSQL_ROOT_PASSWORD=%s\n' "$MYSQL_ROOT_PASSWORD"
+          } > student.env
+
+          chmod 600 student.env
+          echo "### Đã tạo cấu hình cho sinh viên" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Đặt tên image
         id: meta
-        run: echo "image=${REGISTRY}/${GITHUB_REPOSITORY,,}/app" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=${REGISTRY}/${GITHUB_REPOSITORY,,}/app" >> "$GITHUB_OUTPUT"
 
       - name: Build & chạy thử bằng Docker Compose
         env:
           APP_IMAGE: ${{ steps.meta.outputs.image }}
           APP_TAG: ${{ github.sha }}
           APP_VERSION: ${{ github.sha }}
-        # TODO 1: build và khởi động toàn bộ hệ thống bằng Docker Compose (đọc student.env),
-        #         chờ các service sẵn sàng (gợi ý: --wait --wait-timeout 300)
-        run: docker compose --env-file student.env up -d --build --wait --wait-timeout 600
+        run: |
+          docker compose --env-file student.env up -d --build --wait --wait-timeout 600
 
       - name: Smoke test
         run: |
-          set -a; source student.env; set +a
+          set -a
+          source student.env
+          set +a
+
           BASE="http://localhost:${APP_PORT}"
-          # Kiểm tra endpoint $BASE/api/labs trả về JSON (CÓ SẴN, lỗi -> pipeline FAIL)
-          curl -fsS --retry 12 --retry-delay 5 --retry-all-errors "$BASE/api/labs" | grep -q '"id"'
+          curl -fsS --retry 12 --retry-delay 5 --retry-all-errors \
+            "$BASE/api/labs" | grep -q '"id"'
           echo "Smoke test OK"
 
       - name: In log khi lỗi
         if: failure()
-        run: docker compose --env-file student.env logs --no-color
+        run: |
+          if [ -f student.env ]; then
+            docker compose --env-file student.env logs --no-color || true
+          fi
 
-      # TODO 2: đăng nhập GHCR bằng tài khoản github.actor và secrets.GITHUB_TOKEN
       - name: Đăng nhập GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -80,7 +98,6 @@ jobs:
       - name: Push image lên GHCR
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
-        # TODO 3: push image với 2 tag: commit SHA (github.sha) và latest
         run: |
           docker push "$IMAGE:${{ github.sha }}"
           docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
@@ -88,16 +105,20 @@ jobs:
 
       - name: Dọn dẹp
         if: always()
-        run: docker compose --env-file student.env down -v
+        run: |
+          if [ -f student.env ]; then
+            docker compose --env-file student.env down -v || true
+          fi
 
   deploy:
     name: Deploy lên server
-    # TODO 4: chỉ chạy khi job build thành công
     needs: build
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
+
     steps:
       - name: Deploy qua SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -108,25 +129,49 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           DEPLOY_DIR: ${{ github.event.repository.name }}
+          STUDENT_NAME: ${{ secrets.STUDENT_NAME }}
+          STUDENT_ID: ${{ secrets.STUDENT_ID }}
+          STUDENT_CLASS: ${{ secrets.STUDENT_CLASS }}
+          STUDENT_EMAIL: ${{ secrets.STUDENT_EMAIL }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
         with:
-          # TODO 5: kết nối bằng các GitHub Secrets SERVER_HOST, SERVER_USER, SERVER_SSH_KEY
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: APP_IMAGE,APP_TAG,GHCR_USER,GHCR_TOKEN,REPO_URL,DEPLOY_DIR
+          envs: APP_IMAGE,APP_TAG,GHCR_USER,GHCR_TOKEN,REPO_URL,DEPLOY_DIR,STUDENT_NAME,STUDENT_ID,STUDENT_CLASS,STUDENT_EMAIL,MYSQL_USER,MYSQL_PASSWORD,MYSQL_ROOT_PASSWORD
           script: |
             set -e
-            if [ ! -d "$HOME/$DEPLOY_DIR/.git" ]; then
-              git clone "$REPO_URL" "$HOME/$DEPLOY_DIR"
+            DEPLOY_PATH="$HOME/$DEPLOY_DIR"
+
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              git clone "$REPO_URL" "$DEPLOY_PATH"
             fi
-            cd "$HOME/$DEPLOY_DIR"
+
+            cd "$DEPLOY_PATH"
             git fetch origin main
             git reset --hard origin/main
+
+            umask 077
+            {
+              printf 'STUDENT_NAME=%s\n' "$STUDENT_NAME"
+              printf 'STUDENT_ID=%s\n' "$STUDENT_ID"
+              printf 'STUDENT_CLASS=%s\n' "$STUDENT_CLASS"
+              printf 'STUDENT_EMAIL=%s\n' "$STUDENT_EMAIL"
+              printf 'GITHUB_USERNAME=%s\n' "$GHCR_USER"
+              printf 'APP_PORT=8081\n'
+              printf 'COMPOSE_PROJECT_NAME=binh2810-de00101\n'
+              printf 'MYSQL_USER=%s\n' "$MYSQL_USER"
+              printf 'MYSQL_PASSWORD=%s\n' "$MYSQL_PASSWORD"
+              printf 'MYSQL_ROOT_PASSWORD=%s\n' "$MYSQL_ROOT_PASSWORD"
+            } > student.env
+
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
             export APP_IMAGE APP_TAG
-            # TODO 6: kéo image mới của service app về, rồi khởi động lại hệ thống
-            #         KHÔNG build trên server (gợi ý: pull app, up -d --no-build)
             docker compose --env-file student.env pull app
             docker compose --env-file student.env up -d --no-build --wait --wait-timeout 300
             docker logout ghcr.io
             docker compose --env-file student.env ps
+```
